@@ -366,6 +366,7 @@ class CryoViewer {
     this.nParticles      = 1;
     this.nSlices         = 128;
     this.gtMode          = "mip";   // "mip" | "slice" | "3d"
+    this.noisyMode       = "raw";   // "raw" | "denoised"
 
     this.transform = { scale:1, tx:0, ty:0 };
     this.drag      = { active:false, x0:0, y0:0, tx0:0, ty0:0 };
@@ -404,6 +405,7 @@ class CryoViewer {
       this._bindScrubber();
       this._bindSplitView();
       this._bindOrientationWidget();
+      this._bindDenoisingToggle();
 
       document.getElementById("sample-count").textContent = samples.length;
       if (samples.length) this._selectSample(samples[0]);
@@ -470,6 +472,11 @@ class CryoViewer {
     this.currentParticle = 0;
     this.currentSlice    = null;
     this.gtMode          = "mip";
+    this.noisyMode       = "raw";
+    document.getElementById("btn-raw")?.classList.add("active");
+    document.getElementById("btn-denoised")?.classList.remove("active");
+    const _t = document.getElementById("noisy-panel-title");
+    if (_t) _t.textContent = "Noisy Projection";
 
     document.querySelectorAll(".sample-item").forEach(c =>
       c.classList.toggle("active", c.dataset.id === sample.id)
@@ -505,10 +512,13 @@ class CryoViewer {
 
   _noisyURL() {
     const snr = this.currentSNR ? `snr=${encodeURIComponent(this.currentSNR)}&` : "";
-    return `/api/image/noisy/${this.currentSample.id}?${snr}particle=${this.currentParticle}`;
+    const base = this.noisyMode === "denoised" ? "denoised" : "noisy";
+    return `/api/image/${base}/${this.currentSample.id}?${snr}particle=${this.currentParticle}`;
   }
 
   _gtURL() {
+    if (this.noisyMode === "denoised")
+      return `/api/image/clean2d/${this.currentSample.id}?particle=${this.currentParticle}`;
     if (this.gtMode === "mip") return `/api/image/gt/${this.currentSample.id}?axis=0`;
     return `/api/image/gt/${this.currentSample.id}?axis=0&slice=${this.currentSlice ?? 0}`;
   }
@@ -717,7 +727,10 @@ class CryoViewer {
       // Debounce the actual image fetch
       clearTimeout(this._scrubDebounce);
       this._scrubDebounce = setTimeout(() => {
-        if (this.currentSample && this.gtMode !== "3d") this._loadNoisyImage();
+        if (this.currentSample && this.gtMode !== "3d") {
+          this._loadNoisyImage();
+          if (this.noisyMode === "denoised") this._loadGTImage();
+        }
       }, 80);
     });
 
@@ -1067,6 +1080,12 @@ class CryoViewer {
     const badge = document.getElementById("gt-mode-badge");
     const sub   = document.getElementById("gt-sub");
     if (!badge) return;
+    if (this.noisyMode === "denoised") {
+      badge.textContent = "2D GT";
+      badge.style.cssText = "background:rgba(240,160,80,.15);color:var(--noisy-color);border-color:rgba(240,160,80,.3)";
+      if (sub) sub.textContent = "Clean 2D projection — stesso angolo del denoised";
+      return;
+    }
     if (this.gtMode === "3d") {
       badge.textContent = "3D";
       badge.style.cssText = "background:rgba(78,158,255,.12);color:var(--accent);border-color:rgba(78,158,255,.3)";
@@ -1087,6 +1106,50 @@ class CryoViewer {
   _bindOrientationWidget() {
     // Lazy-create the Three.js widget when first needed; just prep the container.
     // Actual widget creation happens in _loadOrientations after data arrives.
+  }
+
+  // ── Denoising toggle ──────────────────────────────────────────
+
+  _bindDenoisingToggle() {
+    const btnRaw      = document.getElementById("btn-raw");
+    const btnDenoised = document.getElementById("btn-denoised");
+    const title       = document.getElementById("noisy-panel-title");
+    if (!btnRaw || !btnDenoised) return;
+
+    const hint = document.getElementById("denoise-hint");
+    fetch("/api/denoise/status").then(r => r.json()).then(data => {
+      if (!data.available) {
+        btnDenoised.disabled = true;
+        if (hint) hint.textContent = "checkpoint non trovato — esegui train.py";
+      }
+    }).catch(() => {});
+
+    btnRaw.addEventListener("click", () => {
+      if (this.noisyMode === "raw") return;
+      this.noisyMode = "raw";
+      btnRaw.classList.add("active");
+      btnDenoised.classList.remove("active");
+      if (title) title.textContent = "Noisy Projection";
+      this._updateGTBadge();
+      if (this.currentSample) {
+        this._loadNoisyImage();
+        this._loadGTImage();
+      }
+    });
+
+    btnDenoised.addEventListener("click", async () => {
+      if (this.noisyMode === "denoised" || btnDenoised.disabled) return;
+      this.noisyMode = "denoised";
+      btnDenoised.classList.add("active");
+      btnRaw.classList.remove("active");
+      if (title) title.textContent = "Denoised";
+      this._updateGTBadge();
+      if (this.currentSample) {
+        this._setLoading(true);
+        try   { await Promise.all([this._loadNoisyImage(), this._loadGTImage()]); }
+        finally { this._setLoading(false); }
+      }
+    });
   }
 
   async _loadOrientations(sample) {

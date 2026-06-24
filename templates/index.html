@@ -107,9 +107,14 @@
         <div class="panel-label">
           <span class="panel-dot panel-dot--noisy"></span>
           <div class="panel-label-text">
-            <span class="panel-label-main">Noisy Projection</span>
+            <span class="panel-label-main" id="noisy-panel-title">Noisy Projection</span>
             <span class="panel-label-sub" id="noisy-sub">Select a sample</span>
           </div>
+        </div>
+        <div class="denoise-toolbar">
+          <button class="denoise-btn active" id="btn-raw">Raw</button>
+          <button class="denoise-btn" id="btn-denoised">Denoise</button>
+          <span class="denoise-hint" id="denoise-hint"></span>
         </div>
         <div class="image-container" id="container-noisy">
           <div class="img-track"><img id="img-noisy" src="" alt="" draggable="false"/></div>

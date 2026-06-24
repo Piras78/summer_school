@@ -363,6 +363,29 @@ body {
 .view-btn.active { background: var(--accent-dim); color: var(--accent); }
 .view-btn:hover:not(.active) { color: var(--text); }
 
+/* ── DENOISE TOOLBAR ─────────────────────────────────────────── */
+.denoise-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 14px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--border-dark);
+  flex-shrink: 0;
+}
+.denoise-btn {
+  padding: 4px 14px; border-radius: 4px; border: 1px solid var(--border-light);
+  background: transparent; color: var(--text-muted);
+  font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s;
+}
+.denoise-btn.active {
+  background: rgba(240,160,80,.18); color: var(--noisy-color);
+  border-color: rgba(240,160,80,.35);
+}
+.denoise-btn:hover:not(.active):not(:disabled) { color: var(--text); border-color: var(--border-light); }
+.denoise-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.denoise-hint {
+  margin-left: 6px; font-size: 10px; color: var(--text-faint); font-style: italic;
+}
+
 /* ── THREE.JS CONTAINER ──────────────────────────────────────── */
 .three-container { flex: 1; position: relative; background: var(--bg-deep); overflow: hidden; }
 .three-container.hidden { display: none; }

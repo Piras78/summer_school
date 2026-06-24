@@ -513,6 +513,108 @@ def api_metadata(sample_id):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# U-Net denoising  (lazy-loaded on first request)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_unet = {"model": None, "device": None}
+
+
+def _percentile_norm(arr: np.ndarray) -> np.ndarray:
+    lo, hi = np.percentile(arr, [1, 99])
+    arr = np.clip(arr, lo, hi)
+    mean, std = arr.mean(), arr.std()
+    return ((arr - mean) / (std + 1e-8)).astype(np.float32)
+
+
+def _load_unet() -> bool:
+    if _unet["model"] is not None:
+        return True
+    try:
+        import sys as _sys, torch
+        _sys.path.insert(0, str(BASE_DIR / "pipeline"))
+        from config import CFG
+        from model import UNet
+        ckpt = Path(CFG["ckpt_best"])
+        if not ckpt.exists():
+            return False
+        device = torch.device(CFG["device"])
+        m = UNet(base_channels=CFG["base_channels"],
+                 depth=CFG["depth"], dropout_p=0.0).to(device)
+        m.load_state_dict(torch.load(str(ckpt), map_location=device))
+        m.eval()
+        _unet["model"] = m
+        _unet["device"] = device
+        print(f"[denoise] U-Net loaded — {device}")
+        return True
+    except Exception as exc:
+        print(f"[denoise] Load failed: {exc}")
+        return False
+
+
+@app.route("/api/denoise/status")
+def api_denoise_status():
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(BASE_DIR / "pipeline"))
+        from config import CFG
+        available = Path(CFG["ckpt_best"]).exists()
+    except Exception:
+        available = False
+    return jsonify({"available": available})
+
+
+@lru_cache(maxsize=4)
+def _load_clean_npy(path: str) -> np.ndarray:
+    return np.load(path)   # (1000, 1, 128, 128) or (1000, 128, 128)
+
+
+@app.route("/api/image/clean2d/<sample_id>")
+def api_clean2d_image(sample_id):
+    s = _find_sample(sample_id)
+    if not s: abort(404)
+    particle  = int(request.args.get("particle", 0))
+    any_noisy = next(iter(s["noisy_paths"].values()), None)
+    if not any_noisy: abort(404)
+    try:
+        conf_num = int(sample_id)
+    except ValueError:
+        abort(404)
+    clean_dir = Path(any_noisy).parent.parent.parent / "clean_projections"
+    npy_path  = clean_dir / f"clean_2d_targets_{conf_num:03d}.npy"
+    if not npy_path.exists(): abort(404)
+    arr   = _load_clean_npy(str(npy_path))
+    frame = arr[particle]
+    if frame.ndim == 3: frame = frame[0]
+    return _send_png(_to_png(_normalize(frame.astype(np.float32))))
+
+
+@app.route("/api/image/denoised/<sample_id>")
+def api_denoised_image(sample_id):
+    s = _find_sample(sample_id)
+    if not s:
+        abort(404)
+    if not _load_unet():
+        abort(503)
+
+    snr      = request.args.get("snr") or (s["snr_levels"][0] if s["snr_levels"] else "default")
+    particle = int(request.args.get("particle", 0))
+    path     = s["noisy_paths"].get(snr)
+    if not path:
+        abort(404)
+
+    import mrcfile as _mrc, torch
+    with _mrc.mmap(path, mode="r", permissive=True) as mrc:
+        raw = mrc.data[particle].copy()
+
+    tensor = torch.from_numpy(_percentile_norm(raw)).unsqueeze(0).unsqueeze(0)
+    tensor = tensor.to(_unet["device"])
+    with torch.no_grad():
+        pred, _ = _unet["model"](tensor)
+    result = pred.squeeze().cpu().numpy()
+    return _send_png(_to_png(_normalize(result)))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     ds = get_dataset()
