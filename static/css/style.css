@@ -512,5 +512,62 @@ body {
   color: var(--text-muted); font-size: 13px; box-shadow: 0 8px 32px rgba(0,0,0,.6);
 }
 
+/* ── PROJECTION SPHERE WIDGET ────────────────────────────────── */
+.sphere-widget {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  width: 148px;
+  background: rgba(11,13,24,.82);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px;
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+  z-index: 8;
+  cursor: grab;
+  transition: opacity .2s, transform .2s, box-shadow .2s;
+  box-shadow: 0 4px 20px rgba(0,0,0,.5);
+}
+.sphere-widget:hover {
+  transform: scale(1.04);
+  box-shadow: 0 6px 28px rgba(0,0,0,.7);
+}
+.sphere-widget canvas {
+  display: block;
+  width: 148px !important;
+  height: 148px !important;
+}
+.sphere-title {
+  position: absolute;
+  top: 6px; left: 0; right: 0;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.45);
+  pointer-events: none;
+  z-index: 2;
+}
+.sphere-legend {
+  position: absolute;
+  bottom: 6px; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 9px;
+  color: rgba(255,255,255,.45);
+  pointer-events: none;
+  z-index: 2;
+}
+.sphere-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.sphere-dot--cur { background: var(--noisy-color); }
+.sphere-dot--mip { background: var(--gt-color); }
+
 /* ── UTILITIES ───────────────────────────────────────────────── */
 .hidden { display: none !important; }

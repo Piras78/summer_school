@@ -264,6 +264,76 @@ def volume_info(path):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Orientation data  (RELION .star files)
+# ──────────────────────────────────────────────────────────────────────────────
+
+import math as _math
+
+@lru_cache(maxsize=8)
+def _parse_star_angles(star_path):
+    """Parse a RELION .star file and return {sample_id: [(rot,tilt,psi), ...]}."""
+    result   = {}   # {sample_id: {particle_0based_idx: (rot,tilt,psi)}}
+    col_img  = col_rot = col_tilt = col_psi = None
+    col_idx  = 0
+    in_ptcl  = False   # inside data_particles block
+    in_loop  = False   # inside the loop_ header
+
+    with open(star_path, "r") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if line == "data_particles":
+                in_ptcl = True;  col_idx = 0;  continue
+            if not in_ptcl:
+                continue
+            if line == "loop_":
+                in_loop = True;  continue
+            if in_loop and line.startswith("_rln"):
+                name = line.split()[0]
+                if name == "_rlnImageName":  col_img  = col_idx
+                if name == "_rlnAngleRot":   col_rot  = col_idx
+                if name == "_rlnAngleTilt":  col_tilt = col_idx
+                if name == "_rlnAnglePsi":   col_psi  = col_idx
+                col_idx += 1
+                continue
+            if in_loop and col_img is not None and line and not line.startswith("_") and not line.startswith("#"):
+                parts = line.split()
+                need  = max(col_img, col_rot, col_tilt, col_psi) + 1
+                if len(parts) < need:
+                    continue
+                img_name = parts[col_img]          # e.g. "1@000_particles_128.mrcs"
+                if "@" not in img_name:
+                    continue
+                pidx_str, fname = img_name.split("@", 1)
+                sample_id = fname.split("_")[0]    # "000"
+                pidx      = int(pidx_str) - 1      # 0-based
+
+                if sample_id not in result:
+                    result[sample_id] = {}
+                result[sample_id][pidx] = (
+                    float(parts[col_rot]),
+                    float(parts[col_tilt]),
+                    float(parts[col_psi]),
+                )
+
+    # sort each sample's list by particle index
+    return {
+        sid: [angles[i] for i in sorted(angles)]
+        for sid, angles in result.items()
+    }
+
+
+def _angles_to_xyz(rot_deg, tilt_deg):
+    """Convert RELION Euler angles to unit-sphere viewing direction (x,y,z)."""
+    t = _math.radians(tilt_deg)
+    r = _math.radians(rot_deg)
+    return (
+        _math.sin(t) * _math.cos(r),   # x
+        _math.cos(t),                   # y  (north pole = MIP direction)
+        _math.sin(t) * _math.sin(r),   # z
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Flask routes
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -365,6 +435,35 @@ def api_gt_thumb(sample_id):
     if not s:
         abort(404)
     return _send_png(volume_thumb_png(s["gt_path"]))
+
+
+@app.route("/api/orientations/<sample_id>")
+def api_orientations(sample_id):
+    s = _find_sample(sample_id)
+    if not s:
+        abort(404)
+
+    snr  = request.args.get("snr") or (s["snr_levels"][0] if s["snr_levels"] else None)
+    path = s["noisy_paths"].get(snr) if snr else None
+    if not path:
+        return jsonify({"orientations": []})
+
+    star_path = Path(path).parent / f"{snr}.star"
+    if not star_path.exists():
+        return jsonify({"orientations": []})
+
+    by_sample = _parse_star_angles(str(star_path))
+    angles    = by_sample.get(sample_id, [])
+
+    orientations = []
+    for rot, tilt, psi in angles:
+        x, y, z = _angles_to_xyz(rot, tilt)
+        orientations.append({
+            "x": round(x, 5), "y": round(y, 5), "z": round(z, 5),
+            "rot": round(rot, 2), "tilt": round(tilt, 2), "psi": round(psi, 2),
+        })
+
+    return jsonify({"orientations": orientations})
 
 
 @app.route("/api/volume3d/<sample_id>")

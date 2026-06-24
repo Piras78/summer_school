@@ -14,6 +14,154 @@ function plasmaColor(t) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  ProjectionSphereWidget  –  3-D widget showing viewing directions
+// ═══════════════════════════════════════════════════════════════
+class ProjectionSphereWidget {
+  constructor(container) {
+    this.container    = container;
+    this._orientations = [];
+    this._orbit       = { theta: 0.4, phi: 1.05, dragging: false, lx: 0, ly: 0 };
+    this._raf         = null;
+    this._points      = null;
+    this._marker      = null;
+    this._viewLine    = null;
+    this._setup();
+    this._bindEvents();
+    this._animate();
+  }
+
+  _setup() {
+    const w = 148, h = 148;
+    this._renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this._renderer.setSize(w, h);
+    this._renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this._renderer.setClearColor(0x000000, 0);
+
+    this._canvas = this._renderer.domElement;
+    this._canvas.style.cssText = "display:block;width:148px;height:148px;";
+    // Insert before the legend div
+    const legend = this.container.querySelector(".sphere-legend");
+    this.container.insertBefore(this._canvas, legend);
+
+    this._scene  = new THREE.Scene();
+    this._camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+    this._camera.position.z = 2.8;
+
+    // Wireframe sphere
+    this._scene.add(new THREE.Mesh(
+      new THREE.SphereGeometry(1, 16, 10),
+      new THREE.MeshBasicMaterial({ color: 0x1e2236, wireframe: true, transparent: true, opacity: 0.22 })
+    ));
+
+    // North-pole marker = MIP direction (0,1,0) — green
+    const npMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0x43c59e })
+    );
+    npMesh.position.set(0, 1, 0);
+    this._scene.add(npMesh);
+
+    // Thin line from center to north pole
+    const npLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,1,0)]),
+      new THREE.LineBasicMaterial({ color: 0x43c59e, transparent: true, opacity: 0.35 })
+    );
+    this._scene.add(npLine);
+  }
+
+  setOrientations(orientations) {
+    this._orientations = orientations;
+    if (this._points) {
+      this._scene.remove(this._points);
+      this._points.geometry.dispose();
+      this._points.material.dispose();
+      this._points = null;
+    }
+    if (!orientations.length) return;
+
+    const n   = orientations.length;
+    const pos = new Float32Array(n * 3);
+    const col = new Float32Array(n * 3);
+    orientations.forEach((o, i) => {
+      pos[i*3]   = o.x; pos[i*3+1] = o.y; pos[i*3+2] = o.z;
+      col[i*3]   = 0.28; col[i*3+1] = 0.35; col[i*3+2] = 0.52;
+    });
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("color",    new THREE.BufferAttribute(col, 3));
+    this._points = new THREE.Points(geo, new THREE.PointsMaterial({
+      size: 0.055, vertexColors: true, transparent: true, opacity: 0.85, sizeAttenuation: true,
+    }));
+    this._scene.add(this._points);
+  }
+
+  highlight(idx) {
+    // Remove previous orange marker & line
+    if (this._marker)   { this._scene.remove(this._marker);   this._marker.geometry.dispose();   this._marker.material.dispose(); }
+    if (this._viewLine) { this._scene.remove(this._viewLine); this._viewLine.geometry.dispose(); this._viewLine.material.dispose(); }
+    this._marker = this._viewLine = null;
+
+    if (!this._orientations.length || idx >= this._orientations.length) return;
+    const o = this._orientations[idx];
+    const v = new THREE.Vector3(o.x, o.y, o.z);
+
+    this._marker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.1, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xf0a050 })
+    );
+    this._marker.position.copy(v);
+    this._scene.add(this._marker);
+
+    this._viewLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), v.clone()]),
+      new THREE.LineBasicMaterial({ color: 0xf0a050, transparent: true, opacity: 0.75 })
+    );
+    this._scene.add(this._viewLine);
+  }
+
+  _bindEvents() {
+    const el = this._canvas;
+    el.addEventListener("mousedown", e => {
+      this._orbit.dragging = true;
+      this._orbit.lx = e.clientX; this._orbit.ly = e.clientY;
+      e.stopPropagation(); e.preventDefault();
+    });
+    document.addEventListener("mousemove", e => {
+      if (!this._orbit.dragging) return;
+      this._orbit.theta -= (e.clientX - this._orbit.lx) * 0.012;
+      this._orbit.phi    = Math.max(0.1, Math.min(Math.PI - 0.1, this._orbit.phi + (e.clientY - this._orbit.ly) * 0.012));
+      this._orbit.lx = e.clientX; this._orbit.ly = e.clientY;
+    });
+    document.addEventListener("mouseup", () => { this._orbit.dragging = false; });
+    el.addEventListener("wheel", e => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+  }
+
+  _animate() {
+    this._raf = requestAnimationFrame(() => this._animate());
+    if (!this._orbit.dragging) this._orbit.theta += 0.007;
+    const { theta, phi } = this._orbit;
+    const r = 2.8;
+    this._camera.position.set(
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.cos(phi),
+      r * Math.sin(phi) * Math.sin(theta)
+    );
+    this._camera.lookAt(0, 0, 0);
+    this._renderer.render(this._scene, this._camera);
+  }
+
+  dispose() {
+    if (this._raf) cancelAnimationFrame(this._raf);
+    [this._points, this._marker, this._viewLine].forEach(o => {
+      if (o) { this._scene.remove(o); o.geometry?.dispose(); o.material?.dispose(); }
+    });
+    this._renderer.dispose();
+    this._canvas.remove();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  ColormapEngine  –  apply scientific colormaps via canvas LUT
 // ═══════════════════════════════════════════════════════════════
 class ColormapEngine {
@@ -86,9 +234,10 @@ class ColormapEngine {
 class Volume3DRenderer {
   constructor(container) {
     this.container = container;
-    this._raf    = null;
-    this._points = null;
-    this._orbit  = { theta:0.5, phi:1.1, radius:200, dragging:false, lx:0, ly:0 };
+    this._raf       = null;
+    this._points    = null;
+    this._viewArrow = null;
+    this._orbit     = { theta:0.5, phi:1.1, radius:200, dragging:false, lx:0, ly:0 };
     this._setup();
     this._bindEvents();
     this._animate();
@@ -181,9 +330,24 @@ class Volume3DRenderer {
     this._renderer.render(this._scene, this._camera);
   }
 
+  // Show/update an arrow from the viewing direction toward the molecule centre.
+  setViewArrow(x, y, z) {
+    if (this._viewArrow) { this._scene.remove(this._viewArrow); this._viewArrow = null; }
+
+    const origin = new THREE.Vector3(x, y, z).normalize().multiplyScalar(85);
+    const dir    = new THREE.Vector3(-x, -y, -z).normalize();
+    this._viewArrow = new THREE.ArrowHelper(dir, origin, 55, 0xf0a050, 12, 6);
+    this._scene.add(this._viewArrow);
+  }
+
+  clearViewArrow() {
+    if (this._viewArrow) { this._scene.remove(this._viewArrow); this._viewArrow = null; }
+  }
+
   dispose() {
     if (this._raf) cancelAnimationFrame(this._raf);
-    if (this._points) { this._points.geometry.dispose(); this._points.material.dispose(); }
+    if (this._points)    { this._points.geometry.dispose(); this._points.material.dispose(); }
+    if (this._viewArrow) { this._scene.remove(this._viewArrow); }
     this._renderer.dispose();
     this._canvas.remove();
   }
@@ -210,9 +374,11 @@ class CryoViewer {
     this.splitMode = false;
     this.splitPos  = 50;           // percentage from left
 
-    this._renderer3d         = null;
-    this._scrubDebounce      = null;
+    this._renderer3d          = null;
+    this._scrubDebounce       = null;
     this._splitHandleDragging = false;
+    this._sphereWidget        = null;
+    this._orientations        = [];   // [{x,y,z,rot,tilt,psi}] for current sample
 
     this._init();
   }
@@ -237,6 +403,7 @@ class CryoViewer {
       this._bindColormapControls();
       this._bindScrubber();
       this._bindSplitView();
+      this._bindOrientationWidget();
 
       document.getElementById("sample-count").textContent = samples.length;
       if (samples.length) this._selectSample(samples[0]);
@@ -320,10 +487,15 @@ class CryoViewer {
     // Leave split mode on sample change
     if (this.splitMode) this._deactivateSplit();
 
+    this._orientations = [];
+    this._sphereWidget?.setOrientations([]);
+    document.getElementById("sphere-widget")?.classList.add("hidden");
+
     this._setLoading(true);
     try {
       await this._fetchMetadata(sample);
       await Promise.all([this._loadNoisyImage(), this._loadGTImage()]);
+      this._loadOrientations(sample);   // async, non-blocking
     } finally {
       this._setLoading(false);
     }
@@ -540,6 +712,8 @@ class CryoViewer {
       this._updateScrubberUI();
       this._updateStatus();
       this._updateNoisySub();
+      this._sphereWidget?.highlight(idx);
+      this._updateOrientationLabel(idx);
       // Debounce the actual image fetch
       clearTimeout(this._scrubDebounce);
       this._scrubDebounce = setTimeout(() => {
@@ -787,6 +961,9 @@ class CryoViewer {
       document.getElementById("three-stats").innerHTML =
         `Sample ${sample.id}<br>${data.x.length.toLocaleString()} pts shown / ${data.n_total.toLocaleString()} total`;
       requestAnimationFrame(() => this._renderer3d?.resize());
+      // Show viewing-direction arrow for current particle
+      const o = this._orientations[this.currentParticle];
+      if (o) this._renderer3d.setViewArrow(o.x, o.y, o.z);
     } catch (e) {
       console.error("3D load error:", e);
       overlay.classList.add("hidden");
@@ -840,6 +1017,9 @@ class CryoViewer {
     this._updateScrubberUI();
     this._updateStatus();
     this._updateNoisySub();
+    // Update sphere highlight and angle label
+    this._sphereWidget?.highlight(idx);
+    this._updateOrientationLabel(idx);
     if (this.gtMode !== "3d") this._loadNoisyImage();
   }
 
@@ -899,6 +1079,57 @@ class CryoViewer {
       badge.textContent = "MIP";
       badge.style.cssText = "background:rgba(67,197,158,.12);color:var(--gt-color);border-color:rgba(67,197,158,.25)";
       if (sub) sub.textContent = "Top-down projection of full volume";
+    }
+  }
+
+  // ── Orientation sphere widget ─────────────────────────────────
+
+  _bindOrientationWidget() {
+    // Lazy-create the Three.js widget when first needed; just prep the container.
+    // Actual widget creation happens in _loadOrientations after data arrives.
+  }
+
+  async _loadOrientations(sample) {
+    const snr = this.currentSNR || sample.snr_levels?.[0];
+    if (!snr) return;
+
+    try {
+      const data = await fetch(`/api/orientations/${sample.id}?snr=${encodeURIComponent(snr)}`).then(r => r.json());
+      this._orientations = data.orientations || [];
+
+      if (!this._orientations.length) return;
+
+      // Create widget on first load
+      if (!this._sphereWidget) {
+        const container = document.getElementById("sphere-widget");
+        this._sphereWidget = new ProjectionSphereWidget(container);
+      }
+
+      document.getElementById("sphere-widget").classList.remove("hidden");
+      this._sphereWidget.setOrientations(this._orientations);
+      this._sphereWidget.highlight(this.currentParticle);
+      this._updateOrientationLabel(this.currentParticle);
+
+    } catch (e) {
+      console.warn("Orientations unavailable:", e);
+    }
+  }
+
+  // Update noisy subtitle and GT 3D arrow for the given particle index.
+  _updateOrientationLabel(idx) {
+    const o = this._orientations[idx];
+    if (!o) return;
+
+    // Update noisy panel subtitle with angle info
+    const sub = document.getElementById("noisy-sub");
+    if (sub && this.currentSample) {
+      const snrLabel = this.currentSNR?.replace("snr","") ?? "?";
+      sub.textContent = `Proj. ${idx} / ${this.nParticles-1}  ·  SNR ${snrLabel}  ·  Tilt ${Math.round(o.tilt)}°`;
+    }
+
+    // Update arrow in GT 3D view if active
+    if (this.gtMode === "3d" && this._renderer3d) {
+      this._renderer3d.setViewArrow(o.x, o.y, o.z);
     }
   }
 
