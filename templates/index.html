@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Cryo-EM Viewer</title>
 <link rel="stylesheet" href="/static/css/style.css" />
-<!-- Three.js for 3-D volume rendering -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
@@ -26,22 +25,46 @@
       </div>
     </div>
 
-    <!-- SNR selector -->
+    <!-- SNR + Colormap -->
     <div class="header-center">
       <div class="snr-group">
         <span class="snr-label">Noise level (SNR)</span>
         <div id="snr-tabs" class="snr-tabs"></div>
       </div>
+
+      <div class="header-divider"></div>
+
+      <div class="cmap-group">
+        <span class="cmap-label">Colormap</span>
+        <div class="cmap-tabs" id="cmap-tabs">
+          <button class="cmap-btn active" data-cmap="gray">Gray</button>
+          <button class="cmap-btn" data-cmap="hot">Hot</button>
+          <button class="cmap-btn" data-cmap="viridis">Viridis</button>
+          <button class="cmap-btn" data-cmap="plasma">Plasma</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Zoom controls -->
+    <!-- Tools -->
     <div class="header-tools">
+      <!-- Split view toggle -->
+      <button class="tool-btn tool-btn--split" id="btn-split" title="Split comparison view (S)">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="2" y="4" width="7" height="12" rx="1"/>
+          <rect x="11" y="4" width="7" height="12" rx="1"/>
+        </svg>
+        <span>Split</span>
+      </button>
+
+      <div class="tools-sep"></div>
+
       <button class="tool-btn" id="btn-zoom-out" title="Zoom out (-)">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="9" cy="9" r="6"/><line x1="6" y1="9" x2="12" y2="9"/>
           <line x1="14.5" y1="14.5" x2="18" y2="18"/>
         </svg>
       </button>
+      <span class="zoom-badge" id="zoom-label">100%</span>
       <button class="tool-btn" id="btn-zoom-in" title="Zoom in (+)">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="9" cy="9" r="6"/>
@@ -49,8 +72,7 @@
           <line x1="14.5" y1="14.5" x2="18" y2="18"/>
         </svg>
       </button>
-      <span class="zoom-badge" id="zoom-label">100%</span>
-      <button class="tool-btn" id="btn-fit"   title="Fit to window (F)">
+      <button class="tool-btn" id="btn-fit" title="Fit to window (F)">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/>
         </svg>
@@ -73,17 +95,14 @@
         <span class="sidebar-count" id="sample-count">—</span>
       </div>
       <div class="sample-list" id="sample-list">
-        <div class="list-placeholder">
-          <div class="spinner"></div>
-          <span>Loading…</span>
-        </div>
+        <div class="list-placeholder"><div class="spinner"></div><span>Loading…</span></div>
       </div>
     </aside>
 
-    <!-- VIEWER: two panels side by side -->
-    <main class="viewer">
+    <!-- VIEWER -->
+    <main class="viewer" id="viewer">
 
-      <!-- ── LEFT: NOISY PROJECTION ── -->
+      <!-- ── LEFT: NOISY ── -->
       <div class="panel panel--noisy">
         <div class="panel-label">
           <span class="panel-dot panel-dot--noisy"></span>
@@ -93,23 +112,30 @@
           </div>
         </div>
         <div class="image-container" id="container-noisy">
-          <div class="img-track">
-            <img id="img-noisy" src="" alt="" draggable="false" />
-          </div>
+          <div class="img-track"><img id="img-noisy" src="" alt="" draggable="false"/></div>
           <div class="panel-empty" id="empty-noisy">
             <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5">
               <rect x="8" y="8" width="32" height="32" rx="3"/>
               <path d="M16 32l6-8 5 6 4-5 5 7"/><circle cx="19" cy="20" r="3"/>
             </svg>
-            <p>Select a sample from the list</p>
+            <p>Select a sample</p>
           </div>
+        </div>
+        <!-- ★ Particle scrubber -->
+        <div class="scrubber" id="particle-scrubber">
+          <button class="scr-btn" id="scr-prev" title="Previous (←)">‹</button>
+          <div class="scr-track">
+            <input type="range" class="scr-range" id="particle-range" min="0" max="999" value="0" />
+          </div>
+          <button class="scr-btn" id="scr-next" title="Next (→)">›</button>
+          <span class="scr-label" id="scr-label">0 / 999</span>
         </div>
       </div>
 
-      <!-- ── SYNC DIVIDER ── -->
+      <!-- ── DIVIDER ── -->
       <div class="panel-divider">
         <div class="divider-line"></div>
-        <div class="sync-badge" title="Zoom and pan are synchronised between panels">
+        <div class="sync-badge" title="Zoom and pan are synchronised">
           <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
             <path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM7 5h2v3.5l2.5 1.5-1 1.7L7 9.7V5z"/>
           </svg>
@@ -126,36 +152,58 @@
             <span class="panel-label-main">Ground Truth</span>
             <span class="panel-label-sub" id="gt-sub">Clean 3D structure</span>
           </div>
-          <!-- 2D / 3D toggle -->
           <div class="view-toggle" id="view-toggle">
-            <button class="view-btn active" id="btn-view-2d"  title="Show 2D projection / MIP">2D</button>
-            <button class="view-btn"        id="btn-view-3d"  title="Show interactive 3D point cloud">3D</button>
+            <button class="view-btn active" id="btn-view-2d">2D</button>
+            <button class="view-btn"        id="btn-view-3d">3D</button>
           </div>
-          <span class="panel-mode-badge" id="gt-mode-badge">MIP</span>
+          <span class="panel-mode-badge" id="gt-mode-badge" title="MIP = proiezione dell'intero volume. Clicca per navigare per slice Z.">MIP</span>
         </div>
-
-        <!-- 2D image view -->
         <div class="image-container" id="container-gt">
-          <div class="img-track">
-            <img id="img-gt" src="" alt="" draggable="false" />
-          </div>
+          <div class="img-track"><img id="img-gt" src="" alt="" draggable="false"/></div>
           <div class="panel-empty" id="empty-gt">
             <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5">
               <rect x="8" y="8" width="32" height="32" rx="3"/>
               <path d="M16 32l6-8 5 6 4-5 5 7"/><circle cx="19" cy="20" r="3"/>
             </svg>
-            <p>Select a sample from the list</p>
+            <p>Select a sample</p>
           </div>
         </div>
-
-        <!-- 3D Three.js view (hidden by default) -->
         <div class="three-container hidden" id="three-container">
           <div class="three-overlay" id="three-overlay">
-            <div class="spinner spinner--lg"></div>
-            <span>Building 3D model…</span>
+            <div class="spinner spinner--lg"></div><span>Building 3D model…</span>
           </div>
           <div class="three-hint">Drag to rotate · Scroll to zoom</div>
           <div class="three-stats" id="three-stats"></div>
+        </div>
+      </div>
+
+      <!-- ★ SPLIT VIEW OVERLAY (hidden by default) -->
+      <div class="split-overlay hidden" id="split-overlay">
+        <!-- Left half: noisy (clipped right) -->
+        <div class="split-side split-side--noisy" id="split-side-noisy">
+          <img id="split-img-noisy" draggable="false" />
+          <div class="split-banner split-banner--noisy">
+            <span class="split-dot split-dot--noisy"></span>
+            NOISY INPUT
+          </div>
+        </div>
+        <!-- Right half: GT (clipped left) -->
+        <div class="split-side split-side--gt" id="split-side-gt">
+          <img id="split-img-gt" draggable="false" />
+          <div class="split-banner split-banner--gt">
+            <span class="split-dot split-dot--gt"></span>
+            GROUND TRUTH
+          </div>
+        </div>
+        <!-- Draggable handle -->
+        <div class="split-handle" id="split-handle">
+          <div class="split-line"></div>
+          <div class="split-grip">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+              <path d="M7 4h2v12H7zm4 0h2v12h-2z"/>
+            </svg>
+          </div>
+          <div class="split-line"></div>
         </div>
       </div>
 
@@ -163,7 +211,7 @@
   </div>
 
   <!-- ══ STATUS BAR ══════════════════════════════════════════════ -->
-  <div class="statusbar" id="statusbar">
+  <div class="statusbar">
     <span class="status-item" id="status-sample">No sample selected</span>
     <span class="status-sep">·</span>
     <span class="status-item" id="status-particle">—</span>
@@ -172,15 +220,13 @@
   </div>
 
   <!-- ══ NAV BAR ═════════════════════════════════════════════════ -->
-  <div class="navbar" id="navbar">
-
-    <!-- Particle navigation -->
-    <div class="nav-group" id="particle-nav">
+  <div class="navbar">
+    <div class="nav-group">
       <span class="nav-group-label">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="8" cy="8" r="5"/><circle cx="8" cy="8" r="2"/>
         </svg>
-        Projection #
+        Projection
       </span>
       <button class="nav-btn" id="btn-first-particle" title="First">⏮</button>
       <button class="nav-btn" id="btn-prev-particle"  title="Previous (←)">‹</button>
@@ -190,25 +236,22 @@
       <button class="nav-btn" id="btn-last-particle"  title="Last">⏭</button>
     </div>
 
-    <!-- Z-slice navigation (hidden when in MIP mode) -->
     <div class="nav-sep" id="slice-sep"></div>
     <div class="nav-group" id="slice-nav">
-      <span class="nav-group-label">
+      <span class="nav-group-label" title="Sezione orizzontale del volume 3D alla profondità Z">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="3" y="3" width="10" height="10" rx="1"/>
-          <line x1="3" y1="8" x2="13" y2="8"/>
+          <rect x="3" y="3" width="10" height="10" rx="1"/><line x1="3" y1="8" x2="13" y2="8"/>
         </svg>
-        Z Slice
+        GT Z Slice
       </span>
-      <button class="nav-btn" id="btn-first-slice" title="First slice">⏮</button>
-      <button class="nav-btn" id="btn-prev-slice"  title="Previous slice (↑)">‹</button>
+      <button class="nav-btn" id="btn-first-slice">⏮</button>
+      <button class="nav-btn" id="btn-prev-slice" title="(↑)">‹</button>
       <input  class="nav-input" id="slice-input" type="number" min="0" value="64" />
       <span   class="nav-max"   id="slice-max">/ —</span>
-      <button class="nav-btn" id="btn-next-slice"  title="Next slice (↓)">›</button>
-      <button class="nav-btn" id="btn-last-slice"  title="Last slice">⏭</button>
-      <button class="nav-btn nav-btn--mip" id="btn-back-mip" title="Back to full MIP view">↩ MIP</button>
+      <button class="nav-btn" id="btn-next-slice" title="(↓)">›</button>
+      <button class="nav-btn" id="btn-last-slice">⏭</button>
+      <button class="nav-btn nav-btn--mip hidden" id="btn-back-mip" title="Torna alla proiezione MIP">↩ MIP</button>
     </div>
-
   </div>
 
   <!-- ══ INFO BAR ════════════════════════════════════════════════ -->
@@ -218,7 +261,6 @@
 
 </div><!-- /app -->
 
-<!-- Loading overlay -->
 <div class="loading-overlay" id="loading-overlay">
   <div class="loading-card">
     <div class="spinner spinner--lg"></div>

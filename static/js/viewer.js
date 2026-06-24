@@ -1,21 +1,83 @@
 "use strict";
 
 // ═══════════════════════════════════════════════════════════════
-//  Cryo-EM Viewer
+//  Plasma colormap helper (for 3-D point cloud)
 // ═══════════════════════════════════════════════════════════════
-
-// ── Plasma colormap (matches matplotlib) ──────────────────────
 function plasmaColor(t) {
-  const stops = [
-    [13,8,135],[84,2,163],[139,10,165],[185,50,137],
-    [219,92,104],[244,136,73],[252,253,191],
-  ];
-  const n   = stops.length - 1;
+  const stops = [[13,8,135],[84,2,163],[139,10,165],[185,50,137],[219,92,104],[244,136,73],[252,253,191]];
+  const n = stops.length - 1;
   const pos = Math.max(0, Math.min(1, t)) * n;
-  const i   = Math.min(Math.floor(pos), n - 1);
-  const f   = pos - i;
-  const a   = stops[i], b = stops[i + 1];
+  const i = Math.min(Math.floor(pos), n - 1);
+  const f = pos - i;
+  const a = stops[i], b = stops[i + 1];
   return [(a[0]+(b[0]-a[0])*f)/255, (a[1]+(b[1]-a[1])*f)/255, (a[2]+(b[2]-a[2])*f)/255];
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ColormapEngine  –  apply scientific colormaps via canvas LUT
+// ═══════════════════════════════════════════════════════════════
+class ColormapEngine {
+  constructor() {
+    this.current = "gray";
+    this._luts = {
+      gray:    null,
+      hot:     this._buildLUT([[0,0,0],[255,0,0],[255,255,0],[255,255,255]]),
+      viridis: this._buildLUT([[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]]),
+      plasma:  this._buildLUT([[13,8,135],[84,2,163],[185,50,137],[244,136,73],[252,253,191]]),
+    };
+  }
+
+  _buildLUT(stops) {
+    const lut = new Uint8Array(256 * 3);
+    const n   = stops.length - 1;
+    for (let i = 0; i < 256; i++) {
+      const t   = i / 255;
+      const pos = t * n;
+      const idx = Math.min(Math.floor(pos), n - 1);
+      const f   = pos - idx;
+      const a   = stops[idx], b = stops[idx + 1];
+      lut[i*3]   = Math.round(a[0] + (b[0]-a[0]) * f);
+      lut[i*3+1] = Math.round(a[1] + (b[1]-a[1]) * f);
+      lut[i*3+2] = Math.round(a[2] + (b[2]-a[2]) * f);
+    }
+    return lut;
+  }
+
+  // Apply current colormap from srcImg → destImg (synchronous).
+  applyToImg(srcImg, destImg) {
+    if (this.current === "gray") {
+      // For gray mode, set src directly from proxy; origSrc already stored by caller
+      if (destImg !== srcImg) destImg.src = srcImg.src;
+      return;
+    }
+    const lut    = this._luts[this.current];
+    const canvas = document.createElement("canvas");
+    canvas.width  = srcImg.naturalWidth;
+    canvas.height = srcImg.naturalHeight;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(srcImg, 0, 0);
+    const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d  = id.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = d[i];
+      d[i]   = lut[v*3];
+      d[i+1] = lut[v*3+1];
+      d[i+2] = lut[v*3+2];
+    }
+    ctx.putImageData(id, 0, 0);
+    destImg.src = canvas.toDataURL("image/png");
+  }
+
+  // Re-apply colormap to an img that has dataset.origSrc set.
+  reapply(imgEl) {
+    const orig = imgEl.dataset.origSrc;
+    if (!orig) return;
+    if (this.current === "gray") { imgEl.src = orig; return; }
+    const proxy = new Image();
+    proxy.crossOrigin = "anonymous";
+    proxy.onload = () => this.applyToImg(proxy, imgEl);
+    proxy.src    = orig;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -24,10 +86,9 @@ function plasmaColor(t) {
 class Volume3DRenderer {
   constructor(container) {
     this.container = container;
-    this._raf = null;
+    this._raf    = null;
     this._points = null;
-    this._orbit = { theta: 0.5, phi: 1.1, radius: 200, dragging: false, lx: 0, ly: 0 };
-
+    this._orbit  = { theta:0.5, phi:1.1, radius:200, dragging:false, lx:0, ly:0 };
     this._setup();
     this._bindEvents();
     this._animate();
@@ -37,7 +98,7 @@ class Volume3DRenderer {
     const w = this.container.clientWidth  || 600;
     const h = this.container.clientHeight || 400;
 
-    this._renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this._renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
     this._renderer.setSize(w, h);
     this._renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this._renderer.setClearColor(0x060810, 1);
@@ -46,18 +107,15 @@ class Volume3DRenderer {
     this._canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;";
     this.container.appendChild(this._canvas);
 
-    this._scene = new THREE.Scene();
-
+    this._scene  = new THREE.Scene();
     this._camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 2000);
 
-    // Bounding box wireframe (128³ volume outline)
     const box = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(128, 128, 128)),
-      new THREE.LineBasicMaterial({ color: 0x2a3258, transparent: true, opacity: 0.5 })
+      new THREE.LineBasicMaterial({ color:0x2a3258, transparent:true, opacity:0.5 })
     );
     this._scene.add(box);
 
-    // Subtle grid on the floor
     const grid = new THREE.GridHelper(128, 8, 0x1a2040, 0x1a2040);
     grid.position.y = -64;
     this._scene.add(grid);
@@ -65,63 +123,48 @@ class Volume3DRenderer {
 
   _bindEvents() {
     const el = this._canvas;
-
     el.addEventListener("mousedown", e => {
       this._orbit.dragging = true;
-      this._orbit.lx = e.clientX;
-      this._orbit.ly = e.clientY;
+      this._orbit.lx = e.clientX; this._orbit.ly = e.clientY;
       e.stopPropagation();
     });
     document.addEventListener("mousemove", e => {
       if (!this._orbit.dragging) return;
-      const dx = e.clientX - this._orbit.lx;
-      const dy = e.clientY - this._orbit.ly;
-      this._orbit.theta -= dx * 0.007;
-      this._orbit.phi    = Math.max(0.05, Math.min(Math.PI - 0.05, this._orbit.phi + dy * 0.007));
-      this._orbit.lx = e.clientX;
-      this._orbit.ly = e.clientY;
+      this._orbit.theta -= (e.clientX - this._orbit.lx) * 0.007;
+      this._orbit.phi    = Math.max(0.05, Math.min(Math.PI-0.05, this._orbit.phi + (e.clientY - this._orbit.ly) * 0.007));
+      this._orbit.lx = e.clientX; this._orbit.ly = e.clientY;
     });
-    document.addEventListener("mouseup",   () => { this._orbit.dragging = false; });
-
+    document.addEventListener("mouseup", () => { this._orbit.dragging = false; });
     el.addEventListener("wheel", e => {
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       this._orbit.radius = Math.max(60, Math.min(500, this._orbit.radius + e.deltaY * 0.25));
-    }, { passive: false });
+    }, { passive:false });
   }
 
   loadPointCloud(data) {
     if (this._points) { this._scene.remove(this._points); this._points.geometry.dispose(); this._points.material.dispose(); }
-
     const n = data.x.length;
     if (!n) return;
-
     const pos   = new Float32Array(n * 3);
     const color = new Float32Array(n * 3);
-
     for (let i = 0; i < n; i++) {
       pos[i*3]   = data.x[i];
-      pos[i*3+1] = data.z[i];   // swap Y/Z so "up" is Y in Three.js
+      pos[i*3+1] = data.z[i];
       pos[i*3+2] = data.y[i];
       const [r, g, b] = plasmaColor(data.intensity[i]);
       color[i*3] = r; color[i*3+1] = g; color[i*3+2] = b;
     }
-
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(pos,   3));
     geo.setAttribute("color",    new THREE.BufferAttribute(color, 3));
-
-    const mat = new THREE.PointsMaterial({ size: 3.0, vertexColors: true, transparent: true, opacity: 0.9, sizeAttenuation: true });
-    this._points = new THREE.Points(geo, mat);
+    this._points = new THREE.Points(geo, new THREE.PointsMaterial({ size:3, vertexColors:true, transparent:true, opacity:0.9, sizeAttenuation:true }));
     this._scene.add(this._points);
   }
 
   resize() {
-    const w = this.container.clientWidth;
-    const h = this.container.clientHeight;
+    const w = this.container.clientWidth, h = this.container.clientHeight;
     if (!w || !h) return;
-    this._camera.aspect = w / h;
-    this._camera.updateProjectionMatrix();
+    this._camera.aspect = w / h; this._camera.updateProjectionMatrix();
     this._renderer.setSize(w, h);
   }
 
@@ -160,11 +203,16 @@ class CryoViewer {
     this.nSlices         = 128;
     this.gtMode          = "mip";   // "mip" | "slice" | "3d"
 
-    // Shared 2-D zoom/pan (absolute tx, ty)
-    this.transform = { scale: 1, tx: 0, ty: 0 };
-    this.drag      = { active: false, x0: 0, y0: 0, tx0: 0, ty0: 0 };
+    this.transform = { scale:1, tx:0, ty:0 };
+    this.drag      = { active:false, x0:0, y0:0, tx0:0, ty0:0 };
 
-    this._renderer3d = null;
+    this.colormap  = new ColormapEngine();
+    this.splitMode = false;
+    this.splitPos  = 50;           // percentage from left
+
+    this._renderer3d         = null;
+    this._scrubDebounce      = null;
+    this._splitHandleDragging = false;
 
     this._init();
   }
@@ -186,6 +234,9 @@ class CryoViewer {
       this._bindNavControls();
       this._bindZoomButtons();
       this._bind3DToggle();
+      this._bindColormapControls();
+      this._bindScrubber();
+      this._bindSplitView();
 
       document.getElementById("sample-count").textContent = samples.length;
       if (samples.length) this._selectSample(samples[0]);
@@ -197,9 +248,11 @@ class CryoViewer {
   _buildSNRTabs(levels) {
     const el = document.getElementById("snr-tabs");
     if (!levels.length) { el.closest(".snr-group").style.display = "none"; return; }
-
-    // Human-readable labels
-    const labels = { "snr0.001": "0.001 — very noisy", "snr0.005": "0.005 — noisy", "snr0.01": "0.01 — less noisy" };
+    const labels = {
+      "snr0.001": "0.001 — very noisy",
+      "snr0.005": "0.005 — noisy",
+      "snr0.01":  "0.01 — less noisy",
+    };
     el.innerHTML = levels.map((snr, i) =>
       `<button class="snr-tab${i===0?" active":""}" data-snr="${snr}">${labels[snr] ?? snr}</button>`
     ).join("");
@@ -220,22 +273,22 @@ class CryoViewer {
   _buildSampleList(samples) {
     const list = document.getElementById("sample-list");
     list.innerHTML = "";
-    if (!samples.length) { list.innerHTML = `<div class="list-placeholder"><span>No samples found</span></div>`; return; }
-
+    if (!samples.length) {
+      list.innerHTML = `<div class="list-placeholder"><span>No samples found</span></div>`;
+      return;
+    }
     const frag = document.createDocumentFragment();
     samples.forEach(s => {
       const snr0 = s.snr_levels?.[0] ?? "";
       const card = document.createElement("div");
-      card.className  = "sample-card";
+      card.className  = "sample-item";
       card.dataset.id = s.id;
       card.innerHTML  = `
-        <div class="sample-thumb-wrap">
-          <img class="sample-thumb" loading="lazy"
-               src="/api/thumbnail/noisy/${s.id}${snr0?"?snr="+snr0:""}" alt=""/>
-        </div>
+        <img class="sample-thumb" loading="lazy"
+             src="/api/thumbnail/noisy/${s.id}${snr0?"?snr="+snr0:""}" alt=""/>
         <div class="sample-info">
           <div class="sample-name">Sample ${s.id}</div>
-          <div class="sample-meta">${s.snr_levels?.length??0} noise levels · 1000 projections</div>
+          <div class="sample-meta">${s.snr_levels?.length ?? 0} noise levels · 1000 proj.</div>
         </div>`;
       card.addEventListener("click", () => this._selectSample(s));
       frag.appendChild(card);
@@ -251,19 +304,21 @@ class CryoViewer {
     this.currentSlice    = null;
     this.gtMode          = "mip";
 
-    document.querySelectorAll(".sample-card").forEach(c =>
+    document.querySelectorAll(".sample-item").forEach(c =>
       c.classList.toggle("active", c.dataset.id === sample.id)
     );
-    document.querySelector(".sample-card.active")?.scrollIntoView({ block:"nearest", behavior:"smooth" });
+    document.querySelector(".sample-item.active")?.scrollIntoView({ block:"nearest", behavior:"smooth" });
 
     document.getElementById("empty-noisy")?.classList.add("hidden");
     document.getElementById("empty-gt")?.classList.add("hidden");
 
-    // Reset 3D view if open
     if (this._renderer3d) { this._renderer3d.dispose(); this._renderer3d = null; }
     this._set3DActive(false);
     this._updateGTBadge();
     this._updateSliceNavVisibility();
+
+    // Leave split mode on sample change
+    if (this.splitMode) this._deactivateSplit();
 
     this._setLoading(true);
     try {
@@ -280,32 +335,50 @@ class CryoViewer {
     const snr = this.currentSNR ? `snr=${encodeURIComponent(this.currentSNR)}&` : "";
     return `/api/image/noisy/${this.currentSample.id}?${snr}particle=${this.currentParticle}`;
   }
+
   _gtURL() {
     if (this.gtMode === "mip") return `/api/image/gt/${this.currentSample.id}?axis=0`;
-    return `/api/image/gt/${this.currentSample.id}?axis=0&slice=${this.currentSlice??0}`;
+    return `/api/image/gt/${this.currentSample.id}?axis=0&slice=${this.currentSlice ?? 0}`;
   }
 
   _loadNoisyImage() { return this._setImage("img-noisy", this._noisyURL(), true); }
   _loadGTImage()    { return this._setImage("img-gt",    this._gtURL(),    false); }
 
+  // Core image loader: fetches via proxy, stores origSrc, applies colormap.
   _setImage(imgId, url, center) {
     return new Promise(resolve => {
       const el    = document.getElementById(imgId);
       const proxy = new Image();
+      proxy.crossOrigin = "anonymous";
       proxy.onload = () => {
-        el.src = proxy.src;
+        // Store the original URL so colormap can be re-applied later
+        el.dataset.origSrc = url;
         el.width  = proxy.naturalWidth;
         el.height = proxy.naturalHeight;
+
         if (center) {
-          const c  = el.closest(".image-container");
-          this.transform.tx = (c.clientWidth  - proxy.naturalWidth  * this.transform.scale) / 2;
-          this.transform.ty = (c.clientHeight - proxy.naturalHeight * this.transform.scale) / 2;
-          this._applyTransform();
-          this._updateZoomLabel();
-        } else {
-          this._applyTransform();
+          const cont = document.getElementById("container-noisy");
+          const scale = this.transform.scale;
+          this.transform.tx = (cont.clientWidth  - proxy.naturalWidth  * scale) / 2;
+          this.transform.ty = (cont.clientHeight - proxy.naturalHeight * scale) / 2;
         }
-        el.classList.remove("fade-in"); void el.offsetWidth; el.classList.add("fade-in");
+
+        this.colormap.applyToImg(proxy, el);
+        this._applyTransform();
+        this._updateZoomLabel();
+
+        // Mirror to split view if active
+        if (this.splitMode) {
+          const splitId = imgId === "img-noisy" ? "split-img-noisy" : "split-img-gt";
+          const splitEl = document.getElementById(splitId);
+          if (splitEl) {
+            splitEl.dataset.origSrc = url;
+            splitEl.width  = proxy.naturalWidth;
+            splitEl.height = proxy.naturalHeight;
+            this.colormap.applyToImg(proxy, splitEl);
+          }
+        }
+
         resolve();
       };
       proxy.onerror = () => resolve();
@@ -322,15 +395,23 @@ class CryoViewer {
       const img = document.getElementById(`img-${type}`);
       if (img) img.style.transform = t;
     });
+    if (this.splitMode) {
+      const sn = document.getElementById("split-img-noisy");
+      const sg = document.getElementById("split-img-gt");
+      if (sn) sn.style.transform = t;
+      if (sg) sg.style.transform = t;
+    }
   }
 
   _resetTransform() {
-    const img = document.getElementById("img-noisy");
-    const c   = document.getElementById("container-noisy");
-    if (img?.naturalWidth && c) {
-      this.transform = { scale:1,
-        tx: (c.clientWidth  - img.naturalWidth)  / 2,
-        ty: (c.clientHeight - img.naturalHeight) / 2 };
+    const img  = document.getElementById("img-noisy");
+    const cont = document.getElementById("container-noisy");
+    if (img?.naturalWidth && cont) {
+      this.transform = {
+        scale: 1,
+        tx: (cont.clientWidth  - img.naturalWidth)  / 2,
+        ty: (cont.clientHeight - img.naturalHeight) / 2,
+      };
     } else {
       this.transform = { scale:1, tx:0, ty:0 };
     }
@@ -338,12 +419,31 @@ class CryoViewer {
     this._updateZoomLabel();
   }
 
+  _resetTransformSplit() {
+    const overlay = document.getElementById("split-overlay");
+    const img     = document.getElementById("split-img-noisy");
+    if (!img?.naturalWidth || !overlay) return;
+    this.transform = {
+      scale: 1,
+      tx: (overlay.clientWidth  - img.naturalWidth)  / 2,
+      ty: (overlay.clientHeight - img.naturalHeight) / 2,
+    };
+    this._applyTransform();
+    this._updateZoomLabel();
+  }
+
   _fitToWindow() {
-    const img = document.getElementById("img-noisy");
-    const c   = document.getElementById("container-noisy");
-    if (!img?.naturalWidth || !c) { this._resetTransform(); return; }
-    const scale = Math.min(c.clientWidth/img.naturalWidth, c.clientHeight/img.naturalHeight) * 0.9;
-    this.transform = { scale, tx:(c.clientWidth-img.naturalWidth*scale)/2, ty:(c.clientHeight-img.naturalHeight*scale)/2 };
+    const img  = document.getElementById("img-noisy");
+    const cont = this.splitMode
+      ? document.getElementById("split-overlay")
+      : document.getElementById("container-noisy");
+    if (!img?.naturalWidth || !cont) { this._resetTransform(); return; }
+    const scale = Math.min(cont.clientWidth / img.naturalWidth, cont.clientHeight / img.naturalHeight) * 0.9;
+    this.transform = {
+      scale,
+      tx: (cont.clientWidth  - img.naturalWidth  * scale) / 2,
+      ty: (cont.clientHeight - img.naturalHeight * scale) / 2,
+    };
     this._applyTransform();
     this._updateZoomLabel();
   }
@@ -360,12 +460,14 @@ class CryoViewer {
   }
 
   _zoomCenter(factor) {
-    const c = document.getElementById("container-noisy");
-    if (c) this._zoom(factor, c.clientWidth/2, c.clientHeight/2);
+    const cont = this.splitMode
+      ? document.getElementById("split-overlay")
+      : document.getElementById("container-noisy");
+    if (cont) this._zoom(factor, cont.clientWidth / 2, cont.clientHeight / 2);
   }
 
   _updateZoomLabel() {
-    document.getElementById("zoom-label").textContent = Math.round(this.transform.scale*100)+"%";
+    document.getElementById("zoom-label").textContent = Math.round(this.transform.scale * 100) + "%";
   }
 
   // ── Panel mouse events ────────────────────────────────────────
@@ -378,7 +480,7 @@ class CryoViewer {
         e.preventDefault();
         const r = el.getBoundingClientRect();
         this._zoom(e.deltaY < 0 ? 1.15 : 1/1.15, e.clientX - r.left, e.clientY - r.top);
-      }, { passive: false });
+      }, { passive:false });
 
       el.addEventListener("mousedown", e => {
         if (e.button !== 0) return;
@@ -391,14 +493,183 @@ class CryoViewer {
     });
 
     document.addEventListener("mousemove", e => {
-      if (!this.drag.active) return;
+      if (!this.drag.active || this._splitHandleDragging) return;
       this.transform.tx = this.drag.tx0 + (e.clientX - this.drag.x0);
       this.transform.ty = this.drag.ty0 + (e.clientY - this.drag.y0);
       this._applyTransform();
     });
     document.addEventListener("mouseup", () => {
       if (this.drag.active) { this.drag.active = false; document.body.style.cursor = ""; }
+      this._splitHandleDragging = false;
     });
+  }
+
+  // ── Colormap ─────────────────────────────────────────────────
+
+  _bindColormapControls() {
+    document.querySelectorAll(".cmap-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".cmap-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        this.colormap.current = btn.dataset.cmap;
+
+        // Re-apply to main panel images
+        this.colormap.reapply(document.getElementById("img-noisy"));
+        this.colormap.reapply(document.getElementById("img-gt"));
+
+        // Re-apply to split view images
+        if (this.splitMode) {
+          this.colormap.reapply(document.getElementById("split-img-noisy"));
+          this.colormap.reapply(document.getElementById("split-img-gt"));
+        }
+      });
+    });
+  }
+
+  // ── Particle scrubber ─────────────────────────────────────────
+
+  _bindScrubber() {
+    const range   = document.getElementById("particle-range");
+    const scrPrev = document.getElementById("scr-prev");
+    const scrNext = document.getElementById("scr-next");
+
+    range.addEventListener("input", () => {
+      const idx = parseInt(range.value, 10);
+      this.currentParticle = idx;
+      document.getElementById("particle-input").value = idx;
+      this._updateScrubberUI();
+      this._updateStatus();
+      this._updateNoisySub();
+      // Debounce the actual image fetch
+      clearTimeout(this._scrubDebounce);
+      this._scrubDebounce = setTimeout(() => {
+        if (this.currentSample && this.gtMode !== "3d") this._loadNoisyImage();
+      }, 80);
+    });
+
+    scrPrev.addEventListener("click", () => this._setParticle(this.currentParticle - 1));
+    scrNext.addEventListener("click", () => this._setParticle(this.currentParticle + 1));
+  }
+
+  _updateScrubberUI() {
+    const max   = Math.max(0, this.nParticles - 1);
+    const range = document.getElementById("particle-range");
+    const label = document.getElementById("scr-label");
+    const pct   = max > 0 ? (this.currentParticle / max) * 100 : 0;
+    if (range) {
+      range.max   = max;
+      range.value = this.currentParticle;
+      range.style.setProperty("--range-pct", pct.toFixed(2) + "%");
+    }
+    if (label) label.textContent = `${this.currentParticle} / ${max}`;
+  }
+
+  // ── Split view ────────────────────────────────────────────────
+
+  _bindSplitView() {
+    document.getElementById("btn-split").addEventListener("click", () => {
+      this.splitMode ? this._deactivateSplit() : this._activateSplit();
+    });
+
+    const overlay = document.getElementById("split-overlay");
+    const handle  = document.getElementById("split-handle");
+
+    // Wheel: zoom (same as panels)
+    overlay.addEventListener("wheel", e => {
+      e.preventDefault();
+      const r = overlay.getBoundingClientRect();
+      this._zoom(e.deltaY < 0 ? 1.15 : 1/1.15, e.clientX - r.left, e.clientY - r.top);
+    }, { passive:false });
+
+    // Pan on overlay (but not when clicking the handle)
+    overlay.addEventListener("mousedown", e => {
+      if (e.button !== 0) return;
+      if (e.target.closest(".split-handle")) return;
+      e.preventDefault();
+      this.drag = { active:true, x0:e.clientX, y0:e.clientY, tx0:this.transform.tx, ty0:this.transform.ty };
+      document.body.style.cursor = "grabbing";
+    });
+
+    overlay.addEventListener("dblclick", e => {
+      if (!e.target.closest(".split-handle")) this._resetTransformSplit();
+    });
+
+    // Handle drag: move the split divider
+    handle.addEventListener("mousedown", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._splitHandleDragging = true;
+    });
+
+    document.addEventListener("mousemove", e => {
+      if (!this._splitHandleDragging) return;
+      const r   = overlay.getBoundingClientRect();
+      const pct = Math.max(5, Math.min(95, ((e.clientX - r.left) / r.width) * 100));
+      this._setSplitPos(pct);
+    });
+
+    // mouseup is handled in _bindPanelEvents (clears splitHandleDragging)
+  }
+
+  _activateSplit() {
+    if (!this.currentSample) return;
+
+    // Auto-switch from 3D to 2D MIP if needed
+    if (this.gtMode === "3d") this._switch2D();
+
+    this.splitMode = true;
+    this.splitPos  = 50;
+
+    document.getElementById("btn-split").classList.add("active");
+
+    // Copy current images + origSrc into split view
+    const copyToSplit = (mainId, splitId) => {
+      const main  = document.getElementById(mainId);
+      const split = document.getElementById(splitId);
+      split.src            = main.src;
+      split.dataset.origSrc = main.dataset.origSrc || "";
+      split.width  = main.naturalWidth;
+      split.height = main.naturalHeight;
+    };
+    copyToSplit("img-noisy", "split-img-noisy");
+    copyToSplit("img-gt",    "split-img-gt");
+
+    // Recentre/fit transform for the full split overlay container
+    const overlay = document.getElementById("split-overlay");
+    const img     = document.getElementById("img-noisy");
+    if (img.naturalWidth && overlay.clientWidth) {
+      const scale = Math.min(
+        overlay.clientWidth  / img.naturalWidth,
+        overlay.clientHeight / img.naturalHeight
+      ) * 0.9;
+      this.transform = {
+        scale,
+        tx: (overlay.clientWidth  - img.naturalWidth  * scale) / 2,
+        ty: (overlay.clientHeight - img.naturalHeight * scale) / 2,
+      };
+    }
+
+    overlay.classList.remove("hidden");
+    this._setSplitPos(50);
+    this._applyTransform();
+    this._updateZoomLabel();
+  }
+
+  _deactivateSplit() {
+    this.splitMode = false;
+    document.getElementById("btn-split").classList.remove("active");
+    document.getElementById("split-overlay").classList.add("hidden");
+    this._fitToWindow();
+  }
+
+  _setSplitPos(pct) {
+    this.splitPos = pct;
+    const sideNoisy = document.getElementById("split-side-noisy");
+    const sideGT    = document.getElementById("split-side-gt");
+    const handle    = document.getElementById("split-handle");
+    if (sideNoisy) sideNoisy.style.clipPath = `inset(0 ${(100-pct).toFixed(2)}% 0 0)`;
+    if (sideGT)    sideGT.style.clipPath    = `inset(0 0 0 ${pct.toFixed(2)}%)`;
+    if (handle)    handle.style.left        = `${pct}%`;
   }
 
   // ── Metadata ──────────────────────────────────────────────────
@@ -419,17 +690,18 @@ class CryoViewer {
     const items = [];
     if (meta.noisy) {
       const n = meta.noisy;
-      items.push(`<span class="info-item"><span class="info-label">Noisy file</span>${n.file}</span>`);
-      items.push(`<span class="info-item"><span class="info-label">Projections</span>${n.n_particles.toLocaleString()}</span>`);
-      items.push(`<span class="info-item"><span class="info-label">Particle size</span>${n.particle_shape.join("×")} px</span>`);
-      if (n.voxel_size_angstrom) items.push(`<span class="info-item"><span class="info-label">Pixel</span>${n.voxel_size_angstrom} Å</span>`);
+      items.push(`<span class="info-item"><span class="info-key">File</span><span class="info-val">${n.file}</span></span>`);
+      items.push(`<span class="info-item"><span class="info-key">Projections</span><span class="info-val">${n.n_particles.toLocaleString()}</span></span>`);
+      items.push(`<span class="info-item"><span class="info-key">Size</span><span class="info-val">${n.particle_shape.join("×")} px</span></span>`);
+      if (n.voxel_size_angstrom) items.push(`<span class="info-item"><span class="info-key">Pixel</span><span class="info-val">${n.voxel_size_angstrom} Å</span></span>`);
+      items.push(`<span class="info-item"><span class="info-key">Noisy file</span><span class="info-val">${n.size_mb} MB</span></span>`);
     }
     if (meta.gt) {
       const g = meta.gt;
-      items.push(`<span class="info-sep">│</span>`);
-      items.push(`<span class="info-item"><span class="info-label">GT file</span>${g.file}</span>`);
-      items.push(`<span class="info-item"><span class="info-label">Volume</span>${g.shape.join("×")} voxels</span>`);
-      if (g.voxel_size?.x) items.push(`<span class="info-item"><span class="info-label">Voxel</span>${g.voxel_size.x.toFixed(2)} Å</span>`);
+      items.push(`<span style="color:var(--border-light);margin:0 4px">│</span>`);
+      items.push(`<span class="info-item"><span class="info-key">GT file</span><span class="info-val">${g.file}</span></span>`);
+      items.push(`<span class="info-item"><span class="info-key">Volume</span><span class="info-val">${g.shape.join("×")} voxels</span></span>`);
+      if (g.voxel_size?.x) items.push(`<span class="info-item"><span class="info-key">Voxel</span><span class="info-val">${g.voxel_size.x.toFixed(2)} Å</span></span>`);
     }
     document.getElementById("info-bar").innerHTML = items.join("");
   }
@@ -437,8 +709,15 @@ class CryoViewer {
   _updateStatus() {
     const s = this.currentSample;
     document.getElementById("status-sample").textContent   = s ? `Sample ${s.id}` : "No sample selected";
-    document.getElementById("status-particle").textContent = s ? `Projection ${this.currentParticle} / ${this.nParticles-1}` : "—";
+    document.getElementById("status-particle").textContent = s ? `Proj. ${this.currentParticle} / ${this.nParticles-1}` : "—";
     document.getElementById("status-snr").textContent      = this.currentSNR ? `SNR ${this.currentSNR.replace("snr","")}` : "—";
+  }
+
+  _updateNoisySub() {
+    const sub = document.getElementById("noisy-sub");
+    if (!sub || !this.currentSample) return;
+    const snrLabel = this.currentSNR?.replace("snr","") ?? "?";
+    sub.textContent = `Projection ${this.currentParticle} / ${this.nParticles-1}  ·  SNR ${snrLabel}`;
   }
 
   // ── 3D toggle ─────────────────────────────────────────────────
@@ -450,10 +729,22 @@ class CryoViewer {
     document.getElementById("btn-view-3d").addEventListener("click", () => {
       if (this.gtMode !== "3d") this._switch3D();
     });
+
+    // Clicking the MIP/Z badge toggles between MIP and Z-slice mode
+    document.getElementById("gt-mode-badge").addEventListener("click", () => {
+      if (!this.currentSample || this.gtMode === "3d") return;
+      if (this.gtMode === "mip") {
+        // Enter slice mode at the middle Z
+        this._setSlice(Math.floor(this.nSlices / 2));
+      } else {
+        this._backToMIP();
+      }
+    });
   }
 
   _switch3D() {
     if (!this.currentSample) return;
+    if (this.splitMode) this._deactivateSplit();
     this.gtMode = "3d";
     this._set3DActive(true);
     this._updateGTBadge();
@@ -475,41 +766,27 @@ class CryoViewer {
     document.getElementById("three-container").classList.toggle("hidden", !on);
     document.getElementById("btn-view-2d").classList.toggle("active", !on);
     document.getElementById("btn-view-3d").classList.toggle("active",  on);
-
-    // Disable 2D zoom controls in 3D mode (they'd be confusing)
     ["btn-zoom-in","btn-zoom-out","btn-reset","btn-fit"].forEach(id => {
-      document.getElementById(id).disabled = on;
-      document.getElementById(id).style.opacity = on ? "0.3" : "";
+      const el = document.getElementById(id);
+      el.disabled     = on;
+      el.style.opacity = on ? "0.3" : "";
     });
   }
 
   async _load3DVolume() {
     const sample = this.currentSample;
     if (!sample) return;
-
     const overlay = document.getElementById("three-overlay");
     overlay.classList.remove("hidden");
-
     try {
       const data = await fetch(`/api/volume3d/${sample.id}`).then(r => r.json());
-
-      // Create or reuse renderer
       const container = document.getElementById("three-container");
-      if (!this._renderer3d) {
-        this._renderer3d = new Volume3DRenderer(container);
-      }
-
+      if (!this._renderer3d) this._renderer3d = new Volume3DRenderer(container);
       overlay.classList.add("hidden");
       this._renderer3d.loadPointCloud(data);
-
-      // Update stats overlay
-      const snr = this.currentSNR?.replace("snr","") ?? "";
       document.getElementById("three-stats").innerHTML =
-        `Sample ${sample.id}<br>${data.x.length.toLocaleString()} points shown<br>${data.n_total.toLocaleString()} total voxels`;
-
-      // Resize after container becomes visible
+        `Sample ${sample.id}<br>${data.x.length.toLocaleString()} pts shown / ${data.n_total.toLocaleString()} total`;
       requestAnimationFrame(() => this._renderer3d?.resize());
-
     } catch (e) {
       console.error("3D load error:", e);
       overlay.classList.add("hidden");
@@ -527,7 +804,6 @@ class CryoViewer {
     document.getElementById("particle-input").addEventListener("change", e =>
       this._setParticle(parseInt(e.target.value, 10) || 0)
     );
-
     bind("btn-first-slice", () => this._setSlice(0));
     bind("btn-last-slice",  () => this._setSlice(this.nSlices - 1));
     bind("btn-prev-slice",  () => this._setSlice(this.currentSlice - 1));
@@ -545,12 +821,13 @@ class CryoViewer {
         case "ArrowRight": e.preventDefault(); this._setParticle(this.currentParticle + 1); break;
         case "ArrowUp":    e.preventDefault(); this._setSlice(this.currentSlice - 1); break;
         case "ArrowDown":  e.preventDefault(); this._setSlice(this.currentSlice + 1); break;
-        case "r": case "R": this._resetTransform(); break;
+        case "r": case "R": this.splitMode ? this._resetTransformSplit() : this._resetTransform(); break;
         case "f": case "F": this._fitToWindow(); break;
         case "+": case "=": this._zoomCenter(1.2); break;
         case "-": case "_": this._zoomCenter(1/1.2); break;
         case "3": this._switch3D(); break;
         case "2": this._switch2D(); break;
+        case "s": case "S": this.splitMode ? this._deactivateSplit() : this._activateSplit(); break;
       }
     });
   }
@@ -560,7 +837,9 @@ class CryoViewer {
     if (idx === this.currentParticle) return;
     this.currentParticle = idx;
     document.getElementById("particle-input").value = idx;
+    this._updateScrubberUI();
     this._updateStatus();
+    this._updateNoisySub();
     if (this.gtMode !== "3d") this._loadNoisyImage();
   }
 
@@ -586,20 +865,22 @@ class CryoViewer {
     document.getElementById("particle-input").value = this.currentParticle;
     document.getElementById("particle-input").max   = this.nParticles - 1;
     document.getElementById("particle-max").textContent = `/ ${this.nParticles-1}`;
-
     document.getElementById("slice-input").value = this.currentSlice ?? Math.floor(this.nSlices/2);
     document.getElementById("slice-input").max   = this.nSlices - 1;
     document.getElementById("slice-max").textContent = `/ ${this.nSlices-1}`;
-
+    this._updateScrubberUI();
     this._updateSliceNavVisibility();
     this._updateStatus();
+    this._updateNoisySub();
   }
 
   _updateSliceNavVisibility() {
-    // Hide Z-slice controls unless we're actually in slice mode
-    const show = (this.gtMode === "slice");
-    document.getElementById("slice-nav")?.classList.toggle("hidden", !show);
-    document.getElementById("slice-sep")?.classList.toggle("hidden", !show);
+    // Z-slice controls are always visible; only hide the "↩ MIP" button when already in MIP mode
+    const inSlice = (this.gtMode === "slice");
+    const in3D    = (this.gtMode === "3d");
+    document.getElementById("slice-nav")?.classList.toggle("hidden", in3D);
+    document.getElementById("slice-sep")?.classList.toggle("hidden", in3D);
+    document.getElementById("btn-back-mip")?.classList.toggle("hidden", !inSlice);
   }
 
   _updateGTBadge() {
@@ -608,30 +889,17 @@ class CryoViewer {
     if (!badge) return;
     if (this.gtMode === "3d") {
       badge.textContent = "3D";
-      badge.style.background = "rgba(78,158,255,.12)";
-      badge.style.color = "var(--accent)";
-      badge.style.borderColor = "rgba(78,158,255,.3)";
+      badge.style.cssText = "background:rgba(78,158,255,.12);color:var(--accent);border-color:rgba(78,158,255,.3)";
       if (sub) sub.textContent = "Interactive 3D point cloud";
     } else if (this.gtMode === "slice") {
       badge.textContent = `Z=${this.currentSlice}`;
-      badge.style.background = "rgba(67,197,158,.12)";
-      badge.style.color = "var(--gt-color)";
-      badge.style.borderColor = "rgba(67,197,158,.25)";
+      badge.style.cssText = "background:rgba(67,197,158,.12);color:var(--gt-color);border-color:rgba(67,197,158,.25)";
       if (sub) sub.textContent = `Slice ${this.currentSlice} of ${this.nSlices-1}`;
     } else {
       badge.textContent = "MIP";
-      badge.style.background = "rgba(67,197,158,.12)";
-      badge.style.color = "var(--gt-color)";
-      badge.style.borderColor = "rgba(67,197,158,.25)";
+      badge.style.cssText = "background:rgba(67,197,158,.12);color:var(--gt-color);border-color:rgba(67,197,158,.25)";
       if (sub) sub.textContent = "Top-down projection of full volume";
     }
-  }
-
-  _updateNoisySub() {
-    const sub = document.getElementById("noisy-sub");
-    if (!sub || !this.currentSample) return;
-    const snrLabel = this.currentSNR?.replace("snr","") ?? "?";
-    sub.textContent = `Projection ${this.currentParticle} / ${this.nParticles-1}  ·  SNR ${snrLabel}`;
   }
 
   // ── Zoom buttons ──────────────────────────────────────────────
@@ -640,14 +908,14 @@ class CryoViewer {
     const bind = (id, fn) => document.getElementById(id)?.addEventListener("click", fn);
     bind("btn-zoom-in",  () => this._zoomCenter(1.25));
     bind("btn-zoom-out", () => this._zoomCenter(1/1.25));
-    bind("btn-reset",    () => this._resetTransform());
+    bind("btn-reset",    () => this.splitMode ? this._resetTransformSplit() : this._resetTransform());
     bind("btn-fit",      () => this._fitToWindow());
   }
 
   // ── Helpers ───────────────────────────────────────────────────
 
   _setLoading(on) {
-    document.getElementById("loading-overlay").style.display = on ? "flex" : "none";
+    document.getElementById("loading-overlay").classList.toggle("hidden", !on);
   }
 }
 
