@@ -1,2 +1,32 @@
-/env
-/IgG-1D
+# ── Ambiente virtuale ─────────────────────────────────────────────
+/env/
+
+# ── Dataset (file pesanti, non versionare) ────────────────────────
+/IgG-1D/
+
+# ── Pesi del modello e checkpoint ─────────────────────────────────
+pipeline/checkpoints/
+
+# ── Embedding e array NumPy grandi ────────────────────────────────
+pipeline/results/embeddings_*.npy
+pipeline/results/umap_2d_*.npy
+pipeline/results/umap_3d_*.npy
+pipeline/results/labels_*.npy
+pipeline/results/cluster_labels_*.npy
+
+# ── Cache Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── IDE ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# ── Notebook output (opzionale: rimuovi se vuoi committare gli output)
+# *.ipynb  # decommenta se vuoi ignorare i notebook
+
+# ── Varie ─────────────────────────────────────────────────────────
+*.log
+.DS_Store
+Thumbs.db
