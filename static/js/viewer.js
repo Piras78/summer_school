@@ -1033,7 +1033,10 @@ class CryoViewer {
     // Update sphere highlight and angle label
     this._sphereWidget?.highlight(idx);
     this._updateOrientationLabel(idx);
-    if (this.gtMode !== "3d") this._loadNoisyImage();
+    if (this.gtMode !== "3d") {
+      this._loadNoisyImage();
+      if (this.noisyMode === "denoised") this._loadGTImage();
+    }
   }
 
   _setSlice(idx) {
