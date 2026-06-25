@@ -68,23 +68,55 @@ def _ssim_loss(
     return 1.0 - ssim_map.mean()
 
 
+def _topology_loss(emb: torch.Tensor, labels: torch.Tensor, n_confs: int = 100) -> torch.Tensor:
+    """
+    Calcola la loss topologica forzando gli embedding a organizzarsi ad anello.
+    """
+    B = emb.size(0)
+    if B < 2:
+        return torch.tensor(0.0, device=emb.device)
+        
+    # Distanza logica ad anello
+    labels_i = labels.unsqueeze(1)
+    labels_j = labels.unsqueeze(0)
+    diff = torch.abs(labels_i - labels_j)
+    dist_label = torch.min(diff, n_confs - diff)
+    
+    # Normalizza in [0, 1]
+    norm_dist_label = dist_label.float() / (n_confs / 2.0)
+    
+    # Target distance in [0, 2] (compatibile con distanza coseno)
+    target_d = norm_dist_label * 2.0
+    
+    # Distanza coseno degli embedding
+    emb_norm = torch.nn.functional.normalize(emb, p=2, dim=1)
+    cos_sim = torch.mm(emb_norm, emb_norm.t())
+    d_emb = 1.0 - cos_sim
+    
+    return torch.nn.functional.mse_loss(d_emb, target_d)
+
+
 class CompositeLoss(nn.Module):
     """
-    L_total = (1 - lambda_ssim) * MSE + lambda_ssim * (1 - SSIM)
+    L_total = (1 - lambda_ssim) * MSE + lambda_ssim * (1 - SSIM) + lambda_topo * TopoLoss
 
     Attributi pubblici per il logging:
       .last_mse   : valore MSE dell'ultimo forward
       .last_ssim  : valore SSIM dell'ultimo forward (0-1, piu' alto e' meglio)
+      .last_topo  : valore TopoLoss dell'ultimo forward
     """
 
-    def __init__(self, lambda_ssim: float = 0.3):
+    def __init__(self, lambda_ssim: float = 0.3, lambda_topo: float = 0.0, n_confs: int = 100):
         super().__init__()
         self.lambda_ssim = lambda_ssim
+        self.lambda_topo = lambda_topo
+        self.n_confs     = n_confs
         self.mse         = nn.MSELoss()
         self.last_mse    = 0.0
         self.last_ssim   = 0.0
+        self.last_topo   = 0.0
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, emb: torch.Tensor = None, labels: torch.Tensor = None) -> torch.Tensor:
         l_mse  = self.mse(pred, target)
         l_ssim = _ssim_loss(pred, target)
 
@@ -92,7 +124,16 @@ class CompositeLoss(nn.Module):
         self.last_mse  = l_mse.item()
         self.last_ssim = 1.0 - l_ssim.item()
 
-        return (1.0 - self.lambda_ssim) * l_mse + self.lambda_ssim * l_ssim
+        l_total = (1.0 - self.lambda_ssim) * l_mse + self.lambda_ssim * l_ssim
+        
+        if self.lambda_topo > 0 and emb is not None and labels is not None:
+            l_topo = _topology_loss(emb, labels, self.n_confs)
+            self.last_topo = l_topo.item()
+            l_total = l_total + self.lambda_topo * l_topo
+        else:
+            self.last_topo = 0.0
+
+        return l_total
 
 
 # ── Verifica ──────────────────────────────────────────────────────────────────

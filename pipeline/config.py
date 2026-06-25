@@ -47,6 +47,7 @@ CFG = {
 
     # ── Loss ──────────────────────────────────────────────────────────────────
     "lambda_ssim": 0.3,   # peso SSIM; (1 - lambda_ssim) = peso MSE
+    "lambda_topo": 0.1,   # peso topology loss sugli embeddings
 
     # ── Scheduler ─────────────────────────────────────────────────────────────
     "scheduler": "onecycle",   # "onecycle" | "cosine"

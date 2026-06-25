@@ -70,20 +70,21 @@ def run_epoch(model, loader, criterion, optimizer, scaler, scheduler,
               device, is_train: bool):
     model.train() if is_train else model.eval()
 
-    total_loss = total_mse = total_ssim = total_psnr = 0.0
+    total_loss = total_mse = total_ssim = total_topo = total_psnr = 0.0
     n_batches  = len(loader)
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     with ctx:
-        for batch_idx, (noisy, clean, _) in enumerate(loader):
-            noisy, clean = noisy.to(device), clean.to(device)
+        for batch_idx, (noisy, clean, conf_labels) in enumerate(loader):
+            noisy, clean, conf_labels = noisy.to(device), clean.to(device), conf_labels.to(device)
 
             if is_train:
                 optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast("cuda", enabled=CFG["mixed_precision"]):
-                pred, _ = model(noisy)
-                loss     = criterion(pred, clean)
+                pred, bottleneck = model(noisy)
+                emb = bottleneck.mean(dim=[2, 3])
+                loss = criterion(pred, clean, emb, conf_labels)
 
             if is_train:
                 scaler.scale(loss).backward()
@@ -97,6 +98,7 @@ def run_epoch(model, loader, criterion, optimizer, scaler, scheduler,
             total_loss += loss.item()
             total_mse  += criterion.last_mse
             total_ssim += criterion.last_ssim
+            total_topo += criterion.last_topo
             total_psnr += psnr(pred.detach(), clean)
 
             # Progresso ogni 10% degli step
@@ -104,7 +106,7 @@ def run_epoch(model, loader, criterion, optimizer, scaler, scheduler,
                 frac = (batch_idx + 1) / n_batches
                 tag  = "TRAIN" if is_train else "  VAL"
                 print(f"    [{tag}] {frac:5.1%}  loss={loss.item():.4f}  "
-                      f"ssim={criterion.last_ssim:.4f}", end="\r")
+                      f"ssim={criterion.last_ssim:.4f}  topo={criterion.last_topo:.4f}", end="\r")
 
     if is_train and scheduler is not None and CFG["scheduler"] == "cosine":
         scheduler.step()
@@ -114,6 +116,7 @@ def run_epoch(model, loader, criterion, optimizer, scaler, scheduler,
         "loss": total_loss / n,
         "mse":  total_mse  / n,
         "ssim": total_ssim / n,
+        "topo": total_topo / n,
         "psnr": total_psnr / n,
     }
 
@@ -141,7 +144,11 @@ def train():
     print(f"Parametri U-Net : {count_parameters(model):,}")
 
     # Loss, Optimizer
-    criterion = CompositeLoss(lambda_ssim=CFG["lambda_ssim"])
+    criterion = CompositeLoss(
+        lambda_ssim=CFG["lambda_ssim"],
+        lambda_topo=CFG.get("lambda_topo", 0.0),
+        n_confs=CFG.get("n_conformations", 100)
+    ).to(device)
     optimizer = optim.AdamW(model.parameters(),
                             lr=CFG["lr"],
                             weight_decay=CFG["weight_decay"])
@@ -194,10 +201,12 @@ def train():
         print(f"\n  Train  loss={train_metrics['loss']:.4f}  "
               f"mse={train_metrics['mse']:.4f}  "
               f"ssim={train_metrics['ssim']:.4f}  "
+              f"topo={train_metrics['topo']:.4f}  "
               f"psnr={train_metrics['psnr']:.2f}dB")
         print(f"  Val    loss={val_metrics['loss']:.4f}  "
               f"mse={val_metrics['mse']:.4f}  "
               f"ssim={val_metrics['ssim']:.4f}  "
+              f"topo={val_metrics['topo']:.4f}  "
               f"psnr={val_metrics['psnr']:.2f}dB  "
               f"[{elapsed:.0f}s]")
 
